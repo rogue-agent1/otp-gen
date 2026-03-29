@@ -1,58 +1,52 @@
 #!/usr/bin/env python3
-"""TOTP/HOTP one-time password generator (RFC 4226/6238)."""
-import sys, hashlib, hmac, struct, time
+"""otp_gen: HOTP/TOTP one-time password generator (RFC 4226/6238)."""
+import hashlib, hmac, struct, time, sys
 
-def hotp(secret, counter, digits=6):
-    key = secret.encode()
+def hotp(secret: bytes, counter: int, digits: int = 6) -> str:
     msg = struct.pack(">Q", counter)
-    h = hmac.new(key, msg, hashlib.sha1).digest()
+    h = hmac.new(secret, msg, hashlib.sha1).digest()
     offset = h[-1] & 0x0F
     code = struct.unpack(">I", h[offset:offset+4])[0] & 0x7FFFFFFF
     return str(code % (10 ** digits)).zfill(digits)
 
-def totp(secret, digits=6, period=30, t=None):
-    t = t or int(time.time())
-    counter = t // period
+def totp(secret: bytes, period: int = 30, digits: int = 6, t: float = None) -> str:
+    if t is None:
+        t = time.time()
+    counter = int(t) // period
     return hotp(secret, counter, digits)
 
-def verify_totp(secret, code, window=1, period=30, t=None):
-    t = t or int(time.time())
-    for offset in range(-window, window + 1):
-        if totp(secret, period=period, t=t + offset * period) == code:
+def verify_totp(secret: bytes, code: str, period: int = 30, window: int = 1, t: float = None) -> bool:
+    if t is None:
+        t = time.time()
+    counter = int(t) // period
+    for i in range(-window, window + 1):
+        if hotp(secret, counter + i, len(code)) == code:
             return True
     return False
 
-def generate_secret(length=20):
-    import base64
-    raw = bytes(range(length))  # deterministic for demo
-    return base64.b32encode(raw).decode().rstrip("=")
+def test():
+    # RFC 4226 test vector
+    secret = b"12345678901234567890"
+    expected = ["755224", "287082", "359152", "969429", "338314",
+                "254676", "287922", "162583", "399871", "520489"]
+    for i, exp in enumerate(expected):
+        assert hotp(secret, i) == exp, f"HOTP({i}): {hotp(secret, i)} != {exp}"
+    # TOTP
+    t = 59.0
+    code = totp(secret, t=t)
+    assert len(code) == 6
+    assert verify_totp(secret, code, t=t)
+    assert not verify_totp(secret, "000000", t=t, window=0)
+    # Window
+    code_next = totp(secret, t=t + 30)
+    assert verify_totp(secret, code_next, t=t, window=1)
+    # 8 digits
+    code8 = hotp(secret, 0, digits=8)
+    assert len(code8) == 8
+    print("All tests passed!")
 
-def main():
-    if len(sys.argv) < 2: print("Usage: otp_gen.py <demo|test>"); return
-    if sys.argv[1] == "test":
-        # HOTP - deterministic
-        code1 = hotp("testsecret", 0); assert len(code1) == 6; assert code1.isdigit()
-        code2 = hotp("testsecret", 1); assert code2 != code1
-        code3 = hotp("testsecret", 0); assert code3 == code1  # same counter = same code
-        # 8 digits
-        code4 = hotp("testsecret", 0, digits=8); assert len(code4) == 8
-        # TOTP - same time = same code
-        t = 1000000
-        t1 = totp("secret", t=t); t2 = totp("secret", t=t)
-        assert t1 == t2
-        # Different periods = different codes (usually)
-        t3 = totp("secret", t=t); t4 = totp("secret", t=t + 30)
-        # Verify with window
-        code = totp("mysecret", t=t)
-        assert verify_totp("mysecret", code, t=t)
-        assert verify_totp("mysecret", code, t=t + 25)  # within same period
-        assert not verify_totp("mysecret", "000000", t=t)  # wrong code (probably)
-        # Secret gen
-        s = generate_secret(); assert len(s) > 0
-        print("All tests passed!")
+if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "test":
+        test()
     else:
-        secret = "JBSWY3DPEHPK3PXP"
-        code = totp(secret)
-        print(f"TOTP: {code} (valid for {30 - int(time.time()) % 30}s)")
-
-if __name__ == "__main__": main()
+        print("Usage: otp_gen.py test")
